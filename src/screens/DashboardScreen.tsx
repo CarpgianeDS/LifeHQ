@@ -1,3 +1,4 @@
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -8,6 +9,7 @@ import { useTasks } from '../state/TasksContext';
 import { colors, radii, spacing } from '../theme/tokens';
 import type { EmailSuggestion, Task } from '../types/models';
 import type { DashboardStackParamList } from '../navigation/DashboardStack';
+import type { RootTabParamList } from '../navigation/RootTabs';
 
 type Props = NativeStackScreenProps<DashboardStackParamList, 'DashboardHome'>;
 
@@ -205,7 +207,11 @@ export function DashboardScreen({ navigation }: Props) {
 
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionLabel}>Upcoming Reminders</Text>
-          <Pressable onPress={() => navigation.getParent()?.navigate('Reminders')}>
+          <Pressable
+            onPress={() =>
+              navigation.getParent<BottomTabNavigationProp<RootTabParamList>>()?.navigate('Reminders')
+            }
+          >
             <Text style={styles.viewAllLabel}>View all</Text>
           </Pressable>
         </View>

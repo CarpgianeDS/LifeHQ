@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { categoryLabels } from '../data/categories';
 import { useTasks } from '../state/TasksContext';
 import { colors, radii, spacing } from '../theme/tokens';
 
@@ -11,7 +12,6 @@ type Props = {
 };
 
 const priorityLabels = { high: 'High', medium: 'Medium', low: 'Low' } as const;
-const moduleLabels = { house: 'House', bills: 'Bills', admin: 'Admin', oisin: 'Oisin' } as const;
 
 const sourceLabels = {
   manual: 'Added manually',
@@ -54,7 +54,7 @@ export function TaskDetailScreen({ route, navigation }: Props) {
       <View style={styles.pillRow}>
         <View style={[styles.pill, { backgroundColor: category.bg }]}>
           <Text style={[styles.pillLabel, { color: category.fg }]}>
-            {moduleLabels[task.module]}
+            {categoryLabels[task.module]}
           </Text>
         </View>
         <View style={[styles.pill, { backgroundColor: colors.divider }]}>

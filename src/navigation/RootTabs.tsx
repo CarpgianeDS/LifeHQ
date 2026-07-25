@@ -1,9 +1,11 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import React from 'react';
 import { View } from 'react-native';
+import { CalendarStack } from './CalendarStack';
 import { DashboardStack } from './DashboardStack';
+import { MealsStack } from './MealsStack';
 import { TasksStack } from './TasksStack';
-import { PlaceholderScreen } from '../screens/PlaceholderScreen';
+import { RemindersScreen } from '../screens/RemindersScreen';
 import { colors } from '../theme/tokens';
 
 export type RootTabParamList = {
@@ -37,13 +39,9 @@ export function RootTabs() {
     >
       <Tab.Screen name="Dashboard" component={DashboardStack} />
       <Tab.Screen name="Tasks" component={TasksStack} />
-      <Tab.Screen name="Reminders">
-        {() => <PlaceholderScreen label="Reminders" />}
-      </Tab.Screen>
-      <Tab.Screen name="Meals">{() => <PlaceholderScreen label="Meals" />}</Tab.Screen>
-      <Tab.Screen name="Calendar">
-        {() => <PlaceholderScreen label="Calendar" />}
-      </Tab.Screen>
+      <Tab.Screen name="Reminders" component={RemindersScreen} />
+      <Tab.Screen name="Meals" component={MealsStack} />
+      <Tab.Screen name="Calendar" component={CalendarStack} />
     </Tab.Navigator>
   );
 }

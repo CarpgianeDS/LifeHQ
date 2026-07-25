@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { QuickAddSheet } from '../components/QuickAddSheet';
 import { TaskRow } from '../components/TaskRow';
+import { categoryLabels, categoryOrder } from '../data/categories';
 import { useTasks } from '../state/TasksContext';
 import { colors, radii, spacing } from '../theme/tokens';
 import type { CategoryKey } from '../theme/tokens';
@@ -23,10 +24,7 @@ const statusFilters: { key: StatusFilter; label: string }[] = [
 
 const categoryFilters: { key: CategoryFilter; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'house', label: 'House' },
-  { key: 'bills', label: 'Bills' },
-  { key: 'admin', label: 'Admin' },
-  { key: 'oisin', label: 'Oisin' },
+  ...categoryOrder.map((key) => ({ key, label: categoryLabels[key] })),
 ];
 
 export function TasksScreen({ navigation }: Props) {
@@ -175,10 +173,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.accent,
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
+    boxShadow: '0px 8px 12px rgba(181,101,29,0.35)',
     elevation: 6,
   },
   fabLabel: {

@@ -1,7 +1,8 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import React from 'react';
 import { DashboardScreen } from '../screens/DashboardScreen';
-import { PlaceholderScreen } from '../screens/PlaceholderScreen';
+import { HouseholdScreen } from '../screens/HouseholdScreen';
+import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
 import { TaskDetailScreen } from '../screens/TaskDetailScreen';
 
 export type DashboardStackParamList = {
@@ -18,12 +19,8 @@ export function DashboardStack() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="DashboardHome" component={DashboardScreen} />
       <Stack.Screen name="TaskDetail" component={TaskDetailScreen} />
-      <Stack.Screen name="Household">
-        {() => <PlaceholderScreen label="Household" />}
-      </Stack.Screen>
-      <Stack.Screen name="NotificationSettings">
-        {() => <PlaceholderScreen label="Notifications" />}
-      </Stack.Screen>
+      <Stack.Screen name="Household" component={HouseholdScreen} />
+      <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     </Stack.Navigator>
   );
 }
