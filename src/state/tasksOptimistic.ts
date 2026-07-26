@@ -1,4 +1,5 @@
 import type { TaskService } from '../services/TaskService';
+import type { PersistenceQueue } from './persistenceQueue';
 import type { DisplayTask } from '../types/models';
 
 export interface MutationError {
@@ -51,12 +52,22 @@ export function createOperationTracker(): OperationTracker {
  *  for it*. Both the read-current-value step and the optimistic apply
  *  happen inside a single synchronous `updateTasks` call, so a second rapid
  *  tap always sees the first tap's already-applied value, never a stale
- *  render snapshot. */
+ *  render snapshot.
+ *
+ *  The actual repository write is routed through `persistence`, keyed by
+ *  task id: operation ids alone only protect *rollback* identity, they
+ *  don't stop two successful writes for the same task from reaching the
+ *  repository out of invocation order (a slow first write landing *after*
+ *  a fast second one would silently overwrite it). Queuing per task id
+ *  guarantees writes for that task are applied in the order they were
+ *  issued, while different tasks' writes stay fully independent. See
+ *  persistenceQueue.ts. */
 export async function toggleTaskWithRollback(
   id: string,
   service: TaskService,
   updateTasks: UpdateTasks,
   operations: OperationTracker,
+  persistence: PersistenceQueue,
   updateMutationError: UpdateMutationError,
 ): Promise<void> {
   const operationId = operations.next(id);
@@ -77,9 +88,10 @@ export async function toggleTaskWithRollback(
   });
 
   if (nextCompleted === undefined) return; // task wasn't found; nothing to persist
+  const completedValue = nextCompleted; // stable capture for the queued closure below
 
   try {
-    await service.setCompleted(id, nextCompleted);
+    await persistence.enqueue(id, () => service.setCompleted(id, completedValue));
     // Nothing further to do on success: this attempt's error (if any) was
     // already cleared above when it started.
   } catch (error) {
@@ -95,7 +107,7 @@ export async function toggleTaskWithRollback(
       // Defensive: only revert if the task still shows exactly what this
       // operation set it to (it should, since we just confirmed this is
       // still the latest operation — but never overwrite anything else).
-      if (!current || current.completed !== nextCompleted) return prev;
+      if (!current || current.completed !== completedValue) return prev;
       return prev.map((t) => (t.id === id ? { ...t, completed: wasCompleted! } : t));
     });
     updateMutationError(() => ({

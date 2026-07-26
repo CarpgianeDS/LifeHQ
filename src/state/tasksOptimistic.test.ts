@@ -1,4 +1,5 @@
 import { createOperationTracker, toggleTaskWithRollback } from './tasksOptimistic';
+import { createPersistenceQueue } from './persistenceQueue';
 import { TaskService } from '../services/TaskService';
 import { InMemoryTasksRepository } from '../storage/repositories/InMemoryTasksRepository';
 import type { MutationError } from './tasksOptimistic';
@@ -54,6 +55,16 @@ function createMutationErrorContainer() {
   return { getState: () => current, updateMutationError, history };
 }
 
+/** A promise plus its resolve function, for tests that need to hold a
+ *  simulated repository write open until they explicitly release it. */
+function gate(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 describe('toggleTaskWithRollback', () => {
   test('successful toggle: one optimistic write, persisted, no error', async () => {
     const seedTask = makeTask();
@@ -67,6 +78,7 @@ describe('toggleTaskWithRollback', () => {
       service,
       tasksContainer.updateTasks,
       createOperationTracker(),
+      createPersistenceQueue(),
       errorContainer.updateMutationError,
     );
 
@@ -91,6 +103,7 @@ describe('toggleTaskWithRollback', () => {
       service,
       tasksContainer.updateTasks,
       createOperationTracker(),
+      createPersistenceQueue(),
       errorContainer.updateMutationError,
     );
 
@@ -110,6 +123,7 @@ describe('toggleTaskWithRollback', () => {
       service,
       tasksContainer.updateTasks,
       createOperationTracker(),
+      createPersistenceQueue(),
       errorContainer.updateMutationError,
     );
 
@@ -119,29 +133,27 @@ describe('toggleTaskWithRollback', () => {
   });
 
   test('two toggles fired from the same stale render snapshot still compute different next values', async () => {
-    // Simulates the exact bug in finding #1: TasksContext used to call
-    // toggleTaskWithRollback(tasks, id, ...) with `tasks` captured from a
-    // render closure, so two rapid taps could both read the SAME snapshot
-    // and both compute the same "next" completed value. The fixed
-    // signature no longer takes a tasks array at all — every read goes
-    // through updateTasks, which is backed by a plain variable (a stand-in
-    // for TasksContext's ref), not React state. Calling the function twice
-    // without awaiting in between must therefore still see the first
-    // call's effect.
+    // Simulates the exact bug in finding #1 from the first review round:
+    // TasksContext used to call toggleTaskWithRollback(tasks, id, ...) with
+    // `tasks` captured from a render closure, so two rapid taps could both
+    // read the SAME snapshot and both compute the same "next" completed
+    // value. The fixed signature no longer takes a tasks array at all —
+    // every read goes through updateTasks, which is backed by a plain
+    // variable (a stand-in for TasksContext's ref), not React state.
     const seedTask = makeTask({ completed: false });
     const repository = new InMemoryTasksRepository([seedTask]);
     const service = new TaskService(repository);
     const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
 
-    // Fire both taps back-to-back with no await between them — the
-    // "fast second tap" scenario from the finding.
     const first = toggleTaskWithRollback(
       seedTask.id,
       service,
       tasksContainer.updateTasks,
       operations,
+      persistence,
       errorContainer.updateMutationError,
     );
     const second = toggleTaskWithRollback(
@@ -149,6 +161,7 @@ describe('toggleTaskWithRollback', () => {
       service,
       tasksContainer.updateTasks,
       operations,
+      persistence,
       errorContainer.updateMutationError,
     );
     await Promise.all([first, second]);
@@ -169,6 +182,7 @@ describe('toggleTaskWithRollback', () => {
     const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
 
     const toggle = () =>
       toggleTaskWithRollback(
@@ -176,6 +190,7 @@ describe('toggleTaskWithRollback', () => {
         service,
         tasksContainer.updateTasks,
         operations,
+        persistence,
         errorContainer.updateMutationError,
       );
 
@@ -186,71 +201,6 @@ describe('toggleTaskWithRollback', () => {
     expect(operations.latest(seedTask.id)).toBe(3);
     const persisted = await repository.list();
     expect(persisted[0].completed).toBe(true);
-  });
-
-  test('an older failed operation resolving after a newer successful one does not roll back the newer result (ABA-safe via operation id, not boolean value)', async () => {
-    // Constructed so the naive boolean-value compare-and-swap from the
-    // previous round would get this WRONG: operation 1 goes false->true and
-    // fails late; operation 2 (true->false) and operation 3 (false->true)
-    // both resolve first and succeed, leaving the confirmed value at
-    // `true` — the exact same boolean operation 1 originally set. A value-
-    // based guard would see "current (true) === my nextCompleted (true)"
-    // and incorrectly roll back to `false`. The operation-id guard must
-    // recognise operation 1 is no longer the latest (operation 3 is) and
-    // skip the rollback entirely.
-    const seedTask = makeTask({ completed: false });
-    const repository = new InMemoryTasksRepository([seedTask]);
-    const service = new TaskService(repository);
-    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
-    const errorContainer = createMutationErrorContainer();
-    const operations = createOperationTracker();
-
-    let releaseFirst!: () => void;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let callIndex = 0;
-    repository.beforeSetCompleted = async () => {
-      callIndex += 1;
-      if (callIndex === 1) {
-        await firstBlocked;
-        throw new Error('network blip'); // operation 1's write fails, but arrives last
-      }
-      // operations 2 and 3 resolve immediately and succeed.
-    };
-
-    const firstPromise = toggleTaskWithRollback(
-      seedTask.id,
-      service,
-      tasksContainer.updateTasks,
-      operations,
-      errorContainer.updateMutationError,
-    );
-    expect(tasksContainer.getState()[0].completed).toBe(true); // op1 optimistic
-
-    await toggleTaskWithRollback(
-      seedTask.id,
-      service,
-      tasksContainer.updateTasks,
-      operations,
-      errorContainer.updateMutationError,
-    ); // op2: true -> false, succeeds
-    await toggleTaskWithRollback(
-      seedTask.id,
-      service,
-      tasksContainer.updateTasks,
-      operations,
-      errorContainer.updateMutationError,
-    ); // op3: false -> true, succeeds
-    expect(tasksContainer.getState()[0].completed).toBe(true);
-
-    releaseFirst();
-    await firstPromise;
-
-    // op1's stale failure must be a complete no-op: value stays `true`
-    // (op3's confirmed result) and no error is set for it.
-    expect(tasksContainer.getState()[0].completed).toBe(true);
-    expect(errorContainer.getState()).toBeNull();
   });
 
   test('a successful mutation on one task does not clear a different task\'s still-relevant error', async () => {
@@ -265,12 +215,13 @@ describe('toggleTaskWithRollback', () => {
     const tasksContainer = createTasksContainer([toDisplay(taskA), toDisplay(taskB)]);
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
 
-    await toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, errorContainer.updateMutationError);
+    await toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
     expect(errorContainer.getState()).toEqual({ taskId: 'a', message: expect.any(String) });
 
     // B's unrelated, successful mutation must not touch A's error.
-    await toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, errorContainer.updateMutationError);
+    await toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
 
     expect(errorContainer.getState()).toEqual({ taskId: 'a', message: expect.any(String) });
     expect(tasksContainer.getState().find((t) => t.id === 'b')!.completed).toBe(true);
@@ -284,14 +235,233 @@ describe('toggleTaskWithRollback', () => {
     const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
 
-    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, errorContainer.updateMutationError);
+    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
     expect(errorContainer.getState()).not.toBeNull();
 
     // Retry, this time it succeeds.
     repository.failWith = null;
-    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, errorContainer.updateMutationError);
+    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
     expect(errorContainer.getState()).toBeNull();
+  });
+});
+
+describe('toggleTaskWithRollback — persistence write ordering', () => {
+  // These reproduce and guard against the persistence-ordering bug: operation
+  // ids alone only protect *rollback* identity, they don't stop two
+  // successful writes for the same task from reaching the repository out of
+  // invocation order. A slow first write landing *after* a fast second write
+  // would silently overwrite it — UI shows the second tap's value, but the
+  // database holds the first tap's. Every test below drives
+  // InMemoryTasksRepository.beforeSetCompleted to control exactly when each
+  // write is allowed to "reach the repository", so write order is directly
+  // observable rather than inferred from timing.
+
+  test('an older operation resolving after a newer one still writes to the repository first (invocation order preserved)', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+
+    const callOrder: string[] = [];
+    const opOneGate = gate();
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      if (calls === 1) {
+        callOrder.push('op1-start');
+        await opOneGate.promise; // op1 is deliberately the slow one
+        callOrder.push('op1-write');
+        return;
+      }
+      callOrder.push(`op${calls}-write`);
+    };
+
+    const opOne = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    // op2 is issued while op1 is still pending — it must queue behind op1,
+    // never race ahead of it.
+    const opTwo = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(callOrder).toEqual(['op1-start']); // op2's write has not even started yet
+
+    opOneGate.release();
+    await Promise.all([opOne, opTwo]);
+
+    expect(callOrder).toEqual(['op1-start', 'op1-write', 'op2-write']);
+    expect(tasksContainer.getState()[0].completed).toBe(false); // false -> true -> false
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(false);
+  });
+
+  test('two rapid toggles where the first repository call is delayed: the database ends up matching the UI (the originally reported bug)', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+
+    const firstWriteGate = gate();
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      if (calls === 1) await firstWriteGate.promise; // tap 1's write (false -> true) is slow
+    };
+
+    const tap1 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    expect(tasksContainer.getState()[0].completed).toBe(true); // tap 1 optimistic
+
+    const tap2 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    expect(tasksContainer.getState()[0].completed).toBe(false); // tap 2 optimistic
+
+    // Only now let tap 1's write proceed — it must be forced to apply
+    // BEFORE tap 2's write is even attempted, not race in after it.
+    firstWriteGate.release();
+    await Promise.all([tap1, tap2]);
+
+    expect(tasksContainer.getState()[0].completed).toBe(false); // UI: tap 2's value
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(false); // DB matches UI (previously this landed as `true`)
+  });
+
+  test('three rapid toggles whose repository delays would otherwise reverse write order still write in invocation order', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+
+    const callOrder: number[] = [];
+    const delaysMs = [20, 10, 0]; // op1 configured slowest, op3 fastest — reversed from invocation order
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      const n = calls;
+      callOrder.push(n);
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[n - 1]));
+    };
+
+    const toggle = () =>
+      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+
+    await Promise.all([toggle(), toggle(), toggle()]);
+
+    // Each write only *starts* once the previous one has fully finished, so
+    // the recorded start order is 1, 2, 3 regardless of the configured
+    // per-call delays.
+    expect(callOrder).toEqual([1, 2, 3]);
+    expect(tasksContainer.getState()[0].completed).toBe(true); // false -> true -> false -> true
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(true);
+  });
+
+  test('the queue continues after the first operation rejects: a same-task write queued behind it still runs and succeeds', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+
+    const firstGate = gate();
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      if (calls === 1) {
+        await firstGate.promise;
+        throw new Error('network blip'); // op1's write fails
+      }
+      // op2 succeeds normally
+    };
+
+    const opOne = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    expect(tasksContainer.getState()[0].completed).toBe(true); // op1 optimistic: false -> true
+
+    // Issued while op1 is still blocked — must queue behind it.
+    const opTwo = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    expect(tasksContainer.getState()[0].completed).toBe(false); // op2 optimistic: true -> false
+
+    firstGate.release();
+    await Promise.all([opOne, opTwo]);
+
+    expect(calls).toBe(2); // op2's write actually happened — op1's rejection didn't wedge the queue
+    // op1 is stale by the time it rejects (op2 already superseded it), so no
+    // rollback fires for it; op2 succeeded, so its value stands.
+    expect(tasksContainer.getState()[0].completed).toBe(false);
+    expect(errorContainer.getState()).toBeNull();
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(false);
+  });
+
+  test('independent task ids write concurrently — a blocked task A does not delay task B', async () => {
+    const taskA = makeTask({ id: 'a', completed: false });
+    const taskB = makeTask({ id: 'b', completed: false });
+    const repository = new InMemoryTasksRepository([taskA, taskB]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(taskA), toDisplay(taskB)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+
+    const gateA = gate();
+    repository.beforeSetCompleted = async (id) => {
+      if (id === 'a') await gateA.promise; // A's write is blocked indefinitely for now
+    };
+
+    const promiseA = toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const promiseB = toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+
+    // B must complete WITHOUT us ever releasing A's gate.
+    await promiseB;
+    expect(tasksContainer.getState().find((t) => t.id === 'b')!.completed).toBe(true);
+    const persistedBeforeARelease = await repository.list();
+    expect(persistedBeforeARelease.find((t) => t.id === 'b')!.completed).toBe(true);
+
+    gateA.release();
+    await promiseA;
+    expect(tasksContainer.getState().find((t) => t.id === 'a')!.completed).toBe(true);
+    const persistedAfter = await repository.list();
+    expect(persistedAfter.find((t) => t.id === 'a')!.completed).toBe(true);
+  });
+
+  test('several interleaved same-task toggles with mixed artificial delays: the repository always ends up matching the UI', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+
+    const delaysMs = [20, 0, 15, 5, 0]; // scrambled — no consistent fastest/slowest pattern
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      const n = calls;
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[n - 1]));
+    };
+
+    const toggle = () =>
+      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+
+    await Promise.all([toggle(), toggle(), toggle(), toggle(), toggle()]);
+
+    const finalUi = tasksContainer.getState()[0].completed;
+    expect(finalUi).toBe(true); // 5 toggles from false: ends true
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(finalUi); // DB always agrees with UI, regardless of write timing
+    expect(persistence.size()).toBe(0); // the queue entry for this task was cleaned up
   });
 });
 

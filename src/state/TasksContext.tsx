@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import type { AppStateStatus } from 'react-native';
 import { refreshDisplayTasks } from '../data/dueDate';
 import { taskService } from '../services/taskServiceInstance';
+import { createPersistenceQueue } from './persistenceQueue';
 import { createOperationTracker, toggleTaskWithRollback } from './tasksOptimistic';
 import type { MutationError } from './tasksOptimistic';
 import type { DisplayTask, NewTaskInput } from '../types/models';
@@ -66,6 +67,11 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   const operationsRef = useRef<ReturnType<typeof createOperationTracker> | null>(null);
   if (operationsRef.current === null) operationsRef.current = createOperationTracker();
 
+  // Serialises setCompleted writes per task id so a slow write can never
+  // land after (and overwrite) a faster, later one — see persistenceQueue.ts.
+  const persistenceRef = useRef<ReturnType<typeof createPersistenceQueue> | null>(null);
+  if (persistenceRef.current === null) persistenceRef.current = createPersistenceQueue();
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -121,7 +127,14 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   }, [updateTasks]);
 
   const toggleTask = (id: string) =>
-    toggleTaskWithRollback(id, taskService, updateTasks, operationsRef.current!, updateMutationError);
+    toggleTaskWithRollback(
+      id,
+      taskService,
+      updateTasks,
+      operationsRef.current!,
+      persistenceRef.current!,
+      updateMutationError,
+    );
 
   const addTask = async (input: NewTaskInput) => {
     updateMutationError((prev) => (prev && prev.taskId === NEW_TASK_ERROR_KEY ? null : prev));
