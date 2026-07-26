@@ -1,6 +1,6 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { QuickAddSheet } from '../components/QuickAddSheet';
 import { TaskRow } from '../components/TaskRow';
 import { categoryLabels, categoryOrder } from '../data/categories';
@@ -28,7 +28,7 @@ const categoryFilters: { key: CategoryFilter; label: string }[] = [
 ];
 
 export function TasksScreen({ navigation }: Props) {
-  const { tasks, toggleTask } = useTasks();
+  const { tasks, loading, error, toggleTask, retry } = useTasks();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -44,74 +44,94 @@ export function TasksScreen({ navigation }: Props) {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.title}>Tasks</Text>
 
-        <View style={styles.chipRow}>
-          {statusFilters.map((f) => {
-            const active = statusFilter === f.key;
-            return (
-              <Pressable
-                key={f.key}
-                onPress={() => setStatusFilter(f.key)}
-                style={[
-                  styles.chip,
-                  { backgroundColor: active ? colors.accent : colors.divider },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.chipLabel,
-                    { color: active ? '#fff' : colors.textSecondary },
-                  ]}
-                >
-                  {f.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        {loading && (
+          <View style={styles.statusCard}>
+            <ActivityIndicator color={colors.accent} />
+            <Text style={styles.statusLabel}>Loading tasks…</Text>
+          </View>
+        )}
 
-        <View style={styles.chipRow}>
-          {categoryFilters.map((f) => {
-            const active = categoryFilter === f.key;
-            const activeBg = f.key === 'all' ? colors.textPrimary : colors.category[f.key].fg;
-            return (
-              <Pressable
-                key={f.key}
-                onPress={() => setCategoryFilter(f.key)}
-                style={[
-                  styles.chip,
-                  { backgroundColor: active ? activeBg : colors.divider },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.chipLabel,
-                    { color: active ? '#fff' : colors.textSecondary },
-                  ]}
-                >
-                  {f.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        {error && !loading && (
+          <View style={styles.statusCard}>
+            <Text style={styles.errorLabel}>{error}</Text>
+            <Pressable onPress={retry} style={styles.retryButton}>
+              <Text style={styles.retryButtonLabel}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
 
-        <View style={styles.listCard}>
-          {filteredTasks.length === 0 && (
-            <Text style={styles.emptyLabel}>No tasks match these filters.</Text>
-          )}
-          {filteredTasks.map((t) => (
-            <TaskRow
-              key={t.id}
-              title={t.title}
-              dueLabel={t.dueLabel}
-              moduleColor={colors.category[t.module].fg}
-              completed={t.completed}
-              overdue={t.dueBucket === 'overdue'}
-              onToggle={() => toggleTask(t.id)}
-              onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
-            />
-          ))}
-        </View>
+        {!loading && !error && (
+          <>
+            <View style={styles.chipRow}>
+              {statusFilters.map((f) => {
+                const active = statusFilter === f.key;
+                return (
+                  <Pressable
+                    key={f.key}
+                    onPress={() => setStatusFilter(f.key)}
+                    style={[
+                      styles.chip,
+                      { backgroundColor: active ? colors.accent : colors.divider },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.chipLabel,
+                        { color: active ? '#fff' : colors.textSecondary },
+                      ]}
+                    >
+                      {f.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.chipRow}>
+              {categoryFilters.map((f) => {
+                const active = categoryFilter === f.key;
+                const activeBg = f.key === 'all' ? colors.textPrimary : colors.category[f.key].fg;
+                return (
+                  <Pressable
+                    key={f.key}
+                    onPress={() => setCategoryFilter(f.key)}
+                    style={[
+                      styles.chip,
+                      { backgroundColor: active ? activeBg : colors.divider },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.chipLabel,
+                        { color: active ? '#fff' : colors.textSecondary },
+                      ]}
+                    >
+                      {f.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.listCard}>
+              {filteredTasks.length === 0 && (
+                <Text style={styles.emptyLabel}>No tasks match these filters.</Text>
+              )}
+              {filteredTasks.map((t) => (
+                <TaskRow
+                  key={t.id}
+                  title={t.title}
+                  dueLabel={t.dueLabel}
+                  moduleColor={colors.category[t.module].fg}
+                  completed={t.completed}
+                  overdue={t.dueBucket === 'overdue'}
+                  onToggle={() => toggleTask(t.id)}
+                  onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
+                />
+              ))}
+            </View>
+          </>
+        )}
       </ScrollView>
 
       <Pressable onPress={() => setQuickAddOpen(true)} style={styles.fab}>
@@ -151,6 +171,36 @@ const styles = StyleSheet.create({
   chipLabel: {
     fontSize: 13.5,
     fontWeight: '600',
+  },
+  statusCard: {
+    marginTop: 18,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    padding: spacing.cardPadding,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  statusLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  errorLabel: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  retryButton: {
+    backgroundColor: colors.accent,
+    borderRadius: radii.pill,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  retryButtonLabel: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   listCard: {
     marginTop: 18,

@@ -7,7 +7,7 @@ import { TaskRow } from '../components/TaskRow';
 import { initialEmailSuggestions } from '../data/mockTasks';
 import { useTasks } from '../state/TasksContext';
 import { colors, radii, spacing } from '../theme/tokens';
-import type { EmailSuggestion, Task } from '../types/models';
+import type { EmailSuggestion } from '../types/models';
 import type { DashboardStackParamList } from '../navigation/DashboardStack';
 import type { RootTabParamList } from '../navigation/RootTabs';
 
@@ -16,7 +16,7 @@ type Props = NativeStackScreenProps<DashboardStackParamList, 'DashboardHome'>;
 type EmailBannerState = 'connect' | 'scanning' | 'suggestions' | 'done';
 
 export function DashboardScreen({ navigation }: Props) {
-  const { tasks, toggleTask, addTask } = useTasks();
+  const { tasks, loading, error, toggleTask, addTask, retry } = useTasks();
 
   const [emailState, setEmailState] = useState<EmailBannerState>('connect');
   const [suggestions, setSuggestions] = useState<EmailSuggestion[]>(initialEmailSuggestions);
@@ -42,21 +42,22 @@ export function DashboardScreen({ navigation }: Props) {
     });
   }
 
-  function addSuggestion(sug: EmailSuggestion) {
-    const task: Task = {
-      id: `sug-${sug.id}-${Date.now()}`,
-      title: sug.title,
-      module: sug.module,
-      dueLabel: sug.dueLabel,
-      dueBucket: sug.dueBucket,
-      priority: 'medium',
-      completed: false,
-      source: 'email',
-      notes: sug.detail,
-      needsReview: sug.confidence < 0.85,
-    };
-    addTask(task);
-    dismissSuggestion(sug.id);
+  async function addSuggestion(sug: EmailSuggestion) {
+    try {
+      await addTask({
+        title: sug.title,
+        module: sug.module,
+        dueAt: sug.dueAt,
+        priority: 'medium',
+        source: 'email',
+        notes: sug.detail,
+        needsReview: sug.confidence < 0.85,
+      });
+      dismissSuggestion(sug.id);
+    } catch {
+      // Leave the suggestion visible so the user can retry; the error
+      // banner below already surfaces the failure.
+    }
   }
 
   return (
@@ -90,6 +91,23 @@ export function DashboardScreen({ navigation }: Props) {
         <Pressable onPress={() => setQuickAddOpen(true)} style={styles.quickAddButton}>
           <Text style={styles.quickAddLabel}>+ Quick Add</Text>
         </Pressable>
+
+        {loading && (
+          <View style={[styles.card, styles.rowCard]}>
+            <ActivityIndicator color={colors.accent} />
+            <Text style={styles.scanningLabel}>Loading tasks…</Text>
+          </View>
+        )}
+
+        {error && !loading && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Couldn&apos;t load tasks</Text>
+            <Text style={styles.cardBody}>{error}</Text>
+            <Pressable onPress={retry} style={styles.connectButton}>
+              <Text style={styles.connectButtonLabel}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
 
         {emailState === 'connect' && (
           <View style={styles.card}>
@@ -167,18 +185,64 @@ export function DashboardScreen({ navigation }: Props) {
           </>
         )}
 
-        {overdueTasks.length > 0 && (
+        {!loading && !error && (
           <>
-            <Text style={[styles.sectionLabel, styles.overdueLabel]}>Overdue</Text>
+            {overdueTasks.length > 0 && (
+              <>
+                <Text style={[styles.sectionLabel, styles.overdueLabel]}>Overdue</Text>
+                <View style={styles.listCard}>
+                  {overdueTasks.map((t) => (
+                    <TaskRow
+                      key={t.id}
+                      title={t.title}
+                      dueLabel={t.dueLabel}
+                      moduleColor={colors.category[t.module].fg}
+                      completed={t.completed}
+                      overdue
+                      onToggle={() => toggleTask(t.id)}
+                      onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
+                    />
+                  ))}
+                </View>
+              </>
+            )}
+
+            <Text style={styles.sectionLabel}>Today</Text>
             <View style={styles.listCard}>
-              {overdueTasks.map((t) => (
+              {todayTasks.length === 0 && (
+                <Text style={styles.emptyLabel}>Nothing due today — enjoy the break.</Text>
+              )}
+              {todayTasks.map((t) => (
                 <TaskRow
                   key={t.id}
                   title={t.title}
                   dueLabel={t.dueLabel}
                   moduleColor={colors.category[t.module].fg}
                   completed={t.completed}
-                  overdue
+                  onToggle={() => toggleTask(t.id)}
+                  onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
+                />
+              ))}
+            </View>
+
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionLabel}>Upcoming Reminders</Text>
+              <Pressable
+                onPress={() =>
+                  navigation.getParent<BottomTabNavigationProp<RootTabParamList>>()?.navigate('Reminders')
+                }
+              >
+                <Text style={styles.viewAllLabel}>View all</Text>
+              </Pressable>
+            </View>
+            <View style={styles.listCard}>
+              {upcomingPreview.map((t) => (
+                <TaskRow
+                  key={t.id}
+                  title={t.title}
+                  dueLabel={t.dueLabel}
+                  moduleColor={colors.category[t.module].fg}
+                  completed={t.completed}
                   onToggle={() => toggleTask(t.id)}
                   onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
                 />
@@ -186,48 +250,6 @@ export function DashboardScreen({ navigation }: Props) {
             </View>
           </>
         )}
-
-        <Text style={styles.sectionLabel}>Today</Text>
-        <View style={styles.listCard}>
-          {todayTasks.length === 0 && (
-            <Text style={styles.emptyLabel}>Nothing due today — enjoy the break.</Text>
-          )}
-          {todayTasks.map((t) => (
-            <TaskRow
-              key={t.id}
-              title={t.title}
-              dueLabel={t.dueLabel}
-              moduleColor={colors.category[t.module].fg}
-              completed={t.completed}
-              onToggle={() => toggleTask(t.id)}
-              onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
-            />
-          ))}
-        </View>
-
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionLabel}>Upcoming Reminders</Text>
-          <Pressable
-            onPress={() =>
-              navigation.getParent<BottomTabNavigationProp<RootTabParamList>>()?.navigate('Reminders')
-            }
-          >
-            <Text style={styles.viewAllLabel}>View all</Text>
-          </Pressable>
-        </View>
-        <View style={styles.listCard}>
-          {upcomingPreview.map((t) => (
-            <TaskRow
-              key={t.id}
-              title={t.title}
-              dueLabel={t.dueLabel}
-              moduleColor={colors.category[t.module].fg}
-              completed={t.completed}
-              onToggle={() => toggleTask(t.id)}
-              onOpen={() => navigation.navigate('TaskDetail', { taskId: t.id })}
-            />
-          ))}
-        </View>
       </ScrollView>
 
       <QuickAddSheet visible={quickAddOpen} onClose={() => setQuickAddOpen(false)} />

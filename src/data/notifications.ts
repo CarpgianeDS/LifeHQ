@@ -1,6 +1,6 @@
-import type { Task } from '../types/models';
+import type { DisplayTask } from '../types/models';
 
-export function computeNotifSummary(tasks: Task[]): string {
+export function computeNotifSummary(tasks: DisplayTask[]): string {
   const overdue = tasks.filter((t) => t.dueBucket === 'overdue' && !t.completed);
   const today = tasks.filter((t) => t.dueBucket === 'today' && !t.completed);
   const due = [...overdue, ...today];

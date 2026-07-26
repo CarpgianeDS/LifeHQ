@@ -1,5 +1,12 @@
 // Design tokens from the LifeHQ design handoff (design_handoff_lifehq_prototype/README.md).
 
+import type { CategoryKey, PriorityKey } from '../types/models';
+
+// Re-exported so existing `import type { CategoryKey } from '../theme/tokens'`
+// call sites keep working — the theme maps these domain keys to colors, it
+// does not own them (defined in src/types/models.ts).
+export type { CategoryKey, PriorityKey };
+
 export const colors = {
   canvasBg: '#FBFAF8',
   screenBg: '#F7F4EF',
@@ -21,17 +28,14 @@ export const colors = {
     bills: { fg: '#B5651D', bg: '#F3E3D2' },
     admin: { fg: '#3B5B7D', bg: '#E4EBF2' },
     oisin: { fg: '#7A5C8E', bg: '#EFE7F2' },
-  },
+  } satisfies Record<CategoryKey, { fg: string; bg: string }>,
 
   priority: {
     high: '#B4432E',
     medium: '#B5651D',
     low: '#6B8F7A',
-  },
+  } satisfies Record<PriorityKey, string>,
 } as const;
-
-export type CategoryKey = keyof typeof colors.category;
-export type PriorityKey = keyof typeof colors.priority;
 
 export const typography = {
   screenTitle: { fontSize: 28, fontWeight: '700' as const },

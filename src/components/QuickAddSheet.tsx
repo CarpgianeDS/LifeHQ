@@ -12,7 +12,6 @@ import {
 import { categorizeText } from '../data/categorize';
 import { useTasks } from '../state/TasksContext';
 import { colors } from '../theme/tokens';
-import type { Task } from '../types/models';
 
 interface QuickAddSheetProps {
   visible: boolean;
@@ -34,24 +33,25 @@ export function QuickAddSheet({ visible, onClose }: QuickAddSheetProps) {
     const trimmed = text.trim();
     if (!trimmed) return;
     setParsing(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       const module = categorizeText(trimmed);
-      const task: Task = {
-        id: `qa-${Date.now()}`,
-        title: trimmed,
-        module,
-        dueLabel: 'Today',
-        dueBucket: 'today',
-        priority: 'medium',
-        completed: false,
-        source: 'manual',
-        notes: '',
-        needsReview: false,
-      };
-      addTask(task);
-      setParsing(false);
-      setText('');
-      onClose();
+      try {
+        await addTask({
+          title: trimmed,
+          module,
+          dueAt: new Date().toISOString(),
+          priority: 'medium',
+          source: 'manual',
+          notes: '',
+          needsReview: false,
+        });
+        setParsing(false);
+        setText('');
+        onClose();
+      } catch {
+        // Keep the sheet open with the user's text intact so they can retry.
+        setParsing(false);
+      }
     }, 1100);
   }
 
