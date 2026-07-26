@@ -64,7 +64,7 @@ export function TasksScreen({ navigation }: Props) {
           <>
             {mutationError && (
               <View style={styles.mutationErrorCard}>
-                <Text style={styles.mutationErrorText}>{mutationError}</Text>
+                <Text style={styles.mutationErrorText}>{mutationError.message}</Text>
               </View>
             )}
 

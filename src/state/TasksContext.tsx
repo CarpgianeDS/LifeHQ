@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import type { AppStateStatus } from 'react-native';
 import { refreshDisplayTasks } from '../data/dueDate';
 import { taskService } from '../services/taskServiceInstance';
-import { toggleTaskWithRollback } from './tasksOptimistic';
+import { createOperationTracker, toggleTaskWithRollback } from './tasksOptimistic';
+import type { MutationError } from './tasksOptimistic';
 import type { DisplayTask, NewTaskInput } from '../types/models';
 
 interface TasksContextValue {
@@ -13,9 +14,11 @@ interface TasksContextValue {
    *  Blocks the task list; `retry()` re-attempts the load. */
   loadError: string | null;
   /** Non-blocking — a create/update/toggle failed, but whatever tasks were
-   *  already loaded are still valid and must stay visible. Cleared on the
-   *  next successful mutation. */
-  mutationError: string | null;
+   *  already loaded are still valid and must stay visible. Scoped to the
+   *  specific task (or the reserved "new task" key) that produced it, so an
+   *  unrelated mutation's success can never clear it — see
+   *  tasksOptimistic.ts. */
+  mutationError: MutationError | null;
   toggleTask: (id: string) => Promise<void>;
   addTask: (input: NewTaskInput) => Promise<void>;
   retry: () => void;
@@ -31,11 +34,40 @@ const TasksContext = createContext<TasksContextValue | null>(null);
 // needed for a due-date label.
 const DAY_CHANGE_POLL_MS = 60_000;
 
+// Sentinel task id for addTask's own errors — never collides with a real
+// task id, so it can share the same taskId-scoped clearing rule as toggle
+// errors without ever being cleared by (or clearing) an unrelated toggle.
+const NEW_TASK_ERROR_KEY = 'new-task';
+
 export function TasksProvider({ children }: { children: React.ReactNode }) {
-  const [tasks, setTasks] = useState<DisplayTask[]>([]);
+  // tasksRef is the single source of truth read/written synchronously by
+  // updateTasks; `tasks` state exists only to trigger re-renders. This is
+  // what lets two rapid taps each see the other's already-applied change
+  // instead of both reading the same stale render snapshot — a React state
+  // setter's updater isn't guaranteed to run before the next line executes,
+  // but a plain ref read/write is.
+  const tasksRef = useRef<DisplayTask[]>([]);
+  const [tasks, setTasksState] = useState<DisplayTask[]>([]);
+  const updateTasks = useCallback((updater: (prev: DisplayTask[]) => DisplayTask[]): DisplayTask[] => {
+    const next = updater(tasksRef.current);
+    tasksRef.current = next;
+    setTasksState(next);
+    return next;
+  }, []);
+
+  const mutationErrorRef = useRef<MutationError | null>(null);
+  const [mutationError, setMutationErrorState] = useState<MutationError | null>(null);
+  const updateMutationError = useCallback((updater: (prev: MutationError | null) => MutationError | null) => {
+    const next = updater(mutationErrorRef.current);
+    mutationErrorRef.current = next;
+    setMutationErrorState(next);
+  }, []);
+
+  const operationsRef = useRef<ReturnType<typeof createOperationTracker> | null>(null);
+  if (operationsRef.current === null) operationsRef.current = createOperationTracker();
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
@@ -47,7 +79,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       .list()
       .then((loaded) => {
         if (cancelled) return;
-        setTasks(loaded);
+        updateTasks(() => loaded);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -59,14 +91,14 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [reloadToken]);
+  }, [reloadToken, updateTasks]);
 
   // Re-derive dueBucket/dueLabel (never refetch) when the app comes back to
   // the foreground, and periodically in case the calendar day rolls over
   // while the app stays open and active the whole time.
   useEffect(() => {
     function refreshDueStates() {
-      setTasks((prev) => refreshDisplayTasks(prev));
+      updateTasks((prev) => refreshDisplayTasks(prev));
     }
 
     const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
@@ -86,18 +118,19 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       subscription.remove();
       clearInterval(dayChangeInterval);
     };
-  }, []);
+  }, [updateTasks]);
 
   const toggleTask = (id: string) =>
-    toggleTaskWithRollback(tasks, id, taskService, setTasks, setMutationError);
+    toggleTaskWithRollback(id, taskService, updateTasks, operationsRef.current!, updateMutationError);
 
   const addTask = async (input: NewTaskInput) => {
+    updateMutationError((prev) => (prev && prev.taskId === NEW_TASK_ERROR_KEY ? null : prev));
     try {
       const created = await taskService.create(input);
-      setTasks((prev) => [created, ...prev]);
-      setMutationError(null);
+      updateTasks((prev) => [created, ...prev]);
     } catch (err) {
-      setMutationError(err instanceof Error ? err.message : "Couldn't save the new task. Please try again.");
+      const message = err instanceof Error ? err.message : "Couldn't save the new task. Please try again.";
+      updateMutationError(() => ({ taskId: NEW_TASK_ERROR_KEY, message }));
       throw err; // let the caller (e.g. QuickAddSheet) show its own local message too
     }
   };
