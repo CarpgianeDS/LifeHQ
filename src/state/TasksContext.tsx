@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import type { AppStateStatus } from 'react-native';
 import { refreshDisplayTasks } from '../data/dueDate';
 import { taskService } from '../services/taskServiceInstance';
+import { createConfirmedTaskState } from './confirmedTaskState';
 import { createPersistenceQueue } from './persistenceQueue';
 import { createOperationTracker, toggleTaskWithRollback } from './tasksOptimistic';
 import type { MutationError } from './tasksOptimistic';
@@ -72,6 +73,14 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   const persistenceRef = useRef<ReturnType<typeof createPersistenceQueue> | null>(null);
   if (persistenceRef.current === null) persistenceRef.current = createPersistenceQueue();
 
+  // Last completed value actually confirmed persisted per task — what a
+  // failed write rolls back to, since the UI's previous optimistic value
+  // isn't always something the database ever held. Seeded on every load
+  // (below) and updated only on a successful write — see
+  // confirmedTaskState.ts.
+  const confirmedRef = useRef<ReturnType<typeof createConfirmedTaskState> | null>(null);
+  if (confirmedRef.current === null) confirmedRef.current = createConfirmedTaskState();
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -85,6 +94,9 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       .list()
       .then((loaded) => {
         if (cancelled) return;
+        // Replace, not merge: a task no longer present in `loaded` (e.g.
+        // deleted elsewhere) must not leave a stale confirmed entry behind.
+        confirmedRef.current!.resetFrom(loaded);
         updateTasks(() => loaded);
         setLoading(false);
       })
@@ -133,6 +145,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       updateTasks,
       operationsRef.current!,
       persistenceRef.current!,
+      confirmedRef.current!,
       updateMutationError,
     );
 
@@ -140,6 +153,10 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     updateMutationError((prev) => (prev && prev.taskId === NEW_TASK_ERROR_KEY ? null : prev));
     try {
       const created = await taskService.create(input);
+      // A freshly created task is, by definition, already exactly what the
+      // repository holds — seed its confirmed value immediately so a later
+      // toggle that fails has something correct to roll back to.
+      confirmedRef.current!.set(created.id, created.completed);
       updateTasks((prev) => [created, ...prev]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Couldn't save the new task. Please try again.";

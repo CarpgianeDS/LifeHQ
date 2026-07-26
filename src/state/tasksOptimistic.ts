@@ -1,4 +1,5 @@
 import type { TaskService } from '../services/TaskService';
+import type { ConfirmedTaskState } from './confirmedTaskState';
 import type { PersistenceQueue } from './persistenceQueue';
 import type { DisplayTask } from '../types/models';
 
@@ -61,13 +62,21 @@ export function createOperationTracker(): OperationTracker {
  *  a fast second one would silently overwrite it). Queuing per task id
  *  guarantees writes for that task are applied in the order they were
  *  issued, while different tasks' writes stay fully independent. See
- *  persistenceQueue.ts. */
+ *  persistenceQueue.ts.
+ *
+ *  On failure, rollback targets `confirmed.get(id)` — the last value this
+ *  task actually persisted — never the optimistic value that was showing a
+ *  moment before this operation ran. That "previous optimistic value" can
+ *  itself belong to an operation that never persisted (e.g. it also later
+ *  fails), in which case rolling back to it would leave the UI showing
+ *  something the database never held. See confirmedTaskState.ts. */
 export async function toggleTaskWithRollback(
   id: string,
   service: TaskService,
   updateTasks: UpdateTasks,
   operations: OperationTracker,
   persistence: PersistenceQueue,
+  confirmed: ConfirmedTaskState,
   updateMutationError: UpdateMutationError,
 ): Promise<void> {
   const operationId = operations.next(id);
@@ -92,8 +101,9 @@ export async function toggleTaskWithRollback(
 
   try {
     await persistence.enqueue(id, () => service.setCompleted(id, completedValue));
-    // Nothing further to do on success: this attempt's error (if any) was
-    // already cleared above when it started.
+    // This write actually persisted — it's now the task's confirmed value.
+    // Never done during the optimistic apply above, only here.
+    confirmed.set(id, completedValue);
   } catch (error) {
     // Stale/superseded: a newer attempt on this same task has already
     // started (or finished) since this one began. Ignore this failure
@@ -102,13 +112,18 @@ export async function toggleTaskWithRollback(
     // currently showing.
     if (operations.latest(id) !== operationId) return;
 
+    // Fall back to wasCompleted only if this task somehow has no confirmed
+    // entry yet (it always should by the time a toggle can target it —
+    // see TasksContext seeding confirmed state on load/create).
+    const rollbackValue = confirmed.get(id) ?? wasCompleted!;
+
     updateTasks((prev) => {
       const current = prev.find((t) => t.id === id);
       // Defensive: only revert if the task still shows exactly what this
       // operation set it to (it should, since we just confirmed this is
       // still the latest operation — but never overwrite anything else).
       if (!current || current.completed !== completedValue) return prev;
-      return prev.map((t) => (t.id === id ? { ...t, completed: wasCompleted! } : t));
+      return prev.map((t) => (t.id === id ? { ...t, completed: rollbackValue } : t));
     });
     updateMutationError(() => ({
       taskId: id,

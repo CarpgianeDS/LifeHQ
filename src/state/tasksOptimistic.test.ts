@@ -1,4 +1,5 @@
 import { createOperationTracker, toggleTaskWithRollback } from './tasksOptimistic';
+import { createConfirmedTaskState } from './confirmedTaskState';
 import { createPersistenceQueue } from './persistenceQueue';
 import { TaskService } from '../services/TaskService';
 import { InMemoryTasksRepository } from '../storage/repositories/InMemoryTasksRepository';
@@ -55,6 +56,14 @@ function createMutationErrorContainer() {
   return { getState: () => current, updateMutationError, history };
 }
 
+/** Mirrors what TasksContext does right after a load: seed confirmed state
+ *  directly from whatever the repository returned. */
+function seedConfirmed(tasks: DisplayTask[]) {
+  const confirmed = createConfirmedTaskState();
+  confirmed.resetFrom(tasks);
+  return confirmed;
+}
+
 /** A promise plus its resolve function, for tests that need to hold a
  *  simulated repository write open until they explicitly release it. */
 function gate(): { promise: Promise<void>; release: () => void } {
@@ -79,6 +88,7 @@ describe('toggleTaskWithRollback', () => {
       tasksContainer.updateTasks,
       createOperationTracker(),
       createPersistenceQueue(),
+      seedConfirmed([toDisplay(seedTask)]),
       errorContainer.updateMutationError,
     );
 
@@ -90,7 +100,7 @@ describe('toggleTaskWithRollback', () => {
     expect(persisted[0].completed).toBe(true);
   });
 
-  test('failing toggle: optimistic write, then rollback to the original value + a scoped error', async () => {
+  test('failing toggle: optimistic write, then rollback to the original confirmed value + a scoped error', async () => {
     const seedTask = makeTask();
     const repository = new InMemoryTasksRepository([seedTask]);
     repository.failWith = new Error('disk full');
@@ -104,6 +114,7 @@ describe('toggleTaskWithRollback', () => {
       tasksContainer.updateTasks,
       createOperationTracker(),
       createPersistenceQueue(),
+      seedConfirmed([toDisplay(seedTask)]),
       errorContainer.updateMutationError,
     );
 
@@ -124,6 +135,7 @@ describe('toggleTaskWithRollback', () => {
       tasksContainer.updateTasks,
       createOperationTracker(),
       createPersistenceQueue(),
+      seedConfirmed([]),
       errorContainer.updateMutationError,
     );
 
@@ -147,6 +159,7 @@ describe('toggleTaskWithRollback', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const first = toggleTaskWithRollback(
       seedTask.id,
@@ -154,6 +167,7 @@ describe('toggleTaskWithRollback', () => {
       tasksContainer.updateTasks,
       operations,
       persistence,
+      confirmed,
       errorContainer.updateMutationError,
     );
     const second = toggleTaskWithRollback(
@@ -162,6 +176,7 @@ describe('toggleTaskWithRollback', () => {
       tasksContainer.updateTasks,
       operations,
       persistence,
+      confirmed,
       errorContainer.updateMutationError,
     );
     await Promise.all([first, second]);
@@ -183,6 +198,7 @@ describe('toggleTaskWithRollback', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const toggle = () =>
       toggleTaskWithRollback(
@@ -191,6 +207,7 @@ describe('toggleTaskWithRollback', () => {
         tasksContainer.updateTasks,
         operations,
         persistence,
+        confirmed,
         errorContainer.updateMutationError,
       );
 
@@ -216,12 +233,13 @@ describe('toggleTaskWithRollback', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(taskA), toDisplay(taskB)]);
 
-    await toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    await toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(errorContainer.getState()).toEqual({ taskId: 'a', message: expect.any(String) });
 
     // B's unrelated, successful mutation must not touch A's error.
-    await toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    await toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
 
     expect(errorContainer.getState()).toEqual({ taskId: 'a', message: expect.any(String) });
     expect(tasksContainer.getState().find((t) => t.id === 'b')!.completed).toBe(true);
@@ -236,13 +254,14 @@ describe('toggleTaskWithRollback', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
-    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(errorContainer.getState()).not.toBeNull();
 
     // Retry, this time it succeeds.
     repository.failWith = null;
-    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(errorContainer.getState()).toBeNull();
   });
 });
@@ -266,6 +285,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const callOrder: string[] = [];
     const opOneGate = gate();
@@ -281,10 +301,10 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
       callOrder.push(`op${calls}-write`);
     };
 
-    const opOne = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const opOne = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     // op2 is issued while op1 is still pending — it must queue behind op1,
     // never race ahead of it.
-    const opTwo = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const opTwo = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
 
     await Promise.resolve();
     await Promise.resolve();
@@ -308,6 +328,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const firstWriteGate = gate();
     let calls = 0;
@@ -316,10 +337,10 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
       if (calls === 1) await firstWriteGate.promise; // tap 1's write (false -> true) is slow
     };
 
-    const tap1 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const tap1 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(tasksContainer.getState()[0].completed).toBe(true); // tap 1 optimistic
 
-    const tap2 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const tap2 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(tasksContainer.getState()[0].completed).toBe(false); // tap 2 optimistic
 
     // Only now let tap 1's write proceed — it must be forced to apply
@@ -340,6 +361,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const callOrder: number[] = [];
     const delaysMs = [20, 10, 0]; // op1 configured slowest, op3 fastest — reversed from invocation order
@@ -352,7 +374,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     };
 
     const toggle = () =>
-      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
 
     await Promise.all([toggle(), toggle(), toggle()]);
 
@@ -373,6 +395,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const firstGate = gate();
     let calls = 0;
@@ -385,11 +408,11 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
       // op2 succeeds normally
     };
 
-    const opOne = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const opOne = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(tasksContainer.getState()[0].completed).toBe(true); // op1 optimistic: false -> true
 
     // Issued while op1 is still blocked — must queue behind it.
-    const opTwo = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const opTwo = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
     expect(tasksContainer.getState()[0].completed).toBe(false); // op2 optimistic: true -> false
 
     firstGate.release();
@@ -413,14 +436,15 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(taskA), toDisplay(taskB)]);
 
     const gateA = gate();
     repository.beforeSetCompleted = async (id) => {
       if (id === 'a') await gateA.promise; // A's write is blocked indefinitely for now
     };
 
-    const promiseA = toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
-    const promiseB = toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+    const promiseA = toggleTaskWithRollback('a', service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+    const promiseB = toggleTaskWithRollback('b', service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
 
     // B must complete WITHOUT us ever releasing A's gate.
     await promiseB;
@@ -443,6 +467,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const errorContainer = createMutationErrorContainer();
     const operations = createOperationTracker();
     const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]);
 
     const delaysMs = [20, 0, 15, 5, 0]; // scrambled — no consistent fastest/slowest pattern
     let calls = 0;
@@ -453,7 +478,7 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     };
 
     const toggle = () =>
-      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, errorContainer.updateMutationError);
+      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
 
     await Promise.all([toggle(), toggle(), toggle(), toggle(), toggle()]);
 
@@ -462,6 +487,166 @@ describe('toggleTaskWithRollback — persistence write ordering', () => {
     const persisted = await repository.list();
     expect(persisted[0].completed).toBe(finalUi); // DB always agrees with UI, regardless of write timing
     expect(persistence.size()).toBe(0); // the queue entry for this task was cleaned up
+  });
+});
+
+describe('toggleTaskWithRollback — rollback targets the last confirmed persisted value', () => {
+  // These guard against the rollback-consistency bug: `wasCompleted` is
+  // only the *previous optimistic* value, which is not necessarily
+  // anything the repository ever actually held. Rolling back to it (rather
+  // than to the task's last confirmed-persisted value) can leave the UI and
+  // the database permanently disagreeing once two same-task writes fail in
+  // a row, or once a later failure is chained behind an earlier one that
+  // never persisted.
+
+  test('two rapid same-task toggles where both persistence writes fail: UI and repository both return to the original confirmed value', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    repository.beforeSetCompleted = async () => {
+      throw new Error('write failed'); // every write fails
+    };
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]); // confirmed: false
+
+    const toggle = () =>
+      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+
+    await Promise.all([toggle(), toggle()]);
+
+    expect(tasksContainer.getState()[0].completed).toBe(false); // back to the original confirmed value
+    expect(confirmed.get(seedTask.id)).toBe(false); // confirmed never advanced — neither write ever persisted
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(false);
+    expect(errorContainer.getState()).toEqual({ taskId: seedTask.id, message: expect.any(String) });
+  });
+
+  test('an earlier failed write followed by a latest failed write does not roll back to the never-confirmed optimistic value (the originally reported bug)', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]); // confirmed: false
+
+    const firstGate = gate();
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      if (calls === 1) {
+        await firstGate.promise;
+        throw new Error('op1 failed'); // stale by the time it rejects — ignored
+      }
+      throw new Error('op2 failed'); // the latest operation — its rollback is the one that applies
+    };
+
+    const op1 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+    expect(tasksContainer.getState()[0].completed).toBe(true); // op1 optimistic: false -> true
+
+    const op2 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+    expect(tasksContainer.getState()[0].completed).toBe(false); // op2 optimistic: true -> false (its `wasCompleted` is `true`, the trap)
+
+    firstGate.release();
+    await Promise.all([op1, op2]);
+
+    // Old buggy behaviour rolled op2 back to `wasCompleted` (`true` — op1's
+    // never-confirmed optimistic value), leaving the UI at `true` while the
+    // database still held `false`. Correct behaviour rolls back to the
+    // last actually-confirmed value, which is still `false`.
+    expect(tasksContainer.getState()[0].completed).toBe(false);
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(false);
+  });
+
+  test('an earlier successful write followed by a latest failed write rolls back to the successful write\'s confirmed value', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      if (calls === 2) throw new Error('op2 failed');
+      // op1 (call 1) succeeds
+    };
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]); // confirmed: false
+
+    const op1 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+    const op2 = toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+    await Promise.all([op1, op2]);
+
+    // op1 (false -> true) succeeds, so confirmed becomes true; op2
+    // (true -> false) fails and is latest, so it rolls back to the
+    // confirmed value (true) — read directly from the tracker here, not
+    // inferred from the UI alone.
+    expect(confirmed.get(seedTask.id)).toBe(true);
+    expect(tasksContainer.getState()[0].completed).toBe(true);
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(true);
+  });
+
+  test('three rapid toggles with mixed success/failure outcomes where the final operation fails: rolls back to the last confirmed value, not an intermediate optimistic value', async () => {
+    const seedTask = makeTask({ completed: false });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]); // confirmed: false
+
+    // op1 (false -> true) succeeds. op2 (true -> false) fails but is
+    // superseded by op3 before its failure is handled, so it's ignored. op3
+    // (false -> true) is the latest and also fails — its `wasCompleted` is
+    // `false` (op2's never-confirmed optimistic value), which must NOT be
+    // what it rolls back to.
+    let calls = 0;
+    repository.beforeSetCompleted = async () => {
+      calls += 1;
+      if (calls === 1) return; // op1 succeeds
+      throw new Error(`op${calls} failed`); // op2 and op3 both fail
+    };
+
+    const toggle = () =>
+      toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+
+    await Promise.all([toggle(), toggle(), toggle()]);
+
+    expect(calls).toBe(3);
+    expect(confirmed.get(seedTask.id)).toBe(true); // only op1 ever persisted
+    expect(tasksContainer.getState()[0].completed).toBe(true); // matches confirmed, not op2's stale optimistic value
+    const persisted = await repository.list();
+    expect(persisted[0].completed).toBe(true);
+  });
+
+  test('confirmed state seeded from a loaded task list is used as the rollback target, even on the very first toggle', async () => {
+    // Mirrors what TasksContext does on load: the repository already holds
+    // `completed: true` for this task before any toggle ever runs, and
+    // confirmed state is seeded from exactly that.
+    const seedTask = makeTask({ completed: true });
+    const repository = new InMemoryTasksRepository([seedTask]);
+    repository.failWith = new Error('disk full');
+    const service = new TaskService(repository);
+    const tasksContainer = createTasksContainer([toDisplay(seedTask)]);
+    const errorContainer = createMutationErrorContainer();
+    const operations = createOperationTracker();
+    const persistence = createPersistenceQueue();
+    const confirmed = seedConfirmed([toDisplay(seedTask)]); // seeded: true — no write has ever succeeded in this test
+
+    await toggleTaskWithRollback(seedTask.id, service, tasksContainer.updateTasks, operations, persistence, confirmed, errorContainer.updateMutationError);
+
+    // Rolls back to the seeded confirmed value (true), proving
+    // initialisation-from-load — not just from a prior successful write —
+    // is honoured as a valid rollback source.
+    expect(tasksContainer.getState()[0].completed).toBe(true);
   });
 });
 
