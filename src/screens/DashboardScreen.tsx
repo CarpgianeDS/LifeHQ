@@ -16,7 +16,7 @@ type Props = NativeStackScreenProps<DashboardStackParamList, 'DashboardHome'>;
 type EmailBannerState = 'connect' | 'scanning' | 'suggestions' | 'done';
 
 export function DashboardScreen({ navigation }: Props) {
-  const { tasks, loading, error, toggleTask, addTask, retry } = useTasks();
+  const { tasks, loading, loadError, mutationError, toggleTask, addTask, retry } = useTasks();
 
   const [emailState, setEmailState] = useState<EmailBannerState>('connect');
   const [suggestions, setSuggestions] = useState<EmailSuggestion[]>(initialEmailSuggestions);
@@ -99,10 +99,10 @@ export function DashboardScreen({ navigation }: Props) {
           </View>
         )}
 
-        {error && !loading && (
+        {loadError && !loading && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Couldn&apos;t load tasks</Text>
-            <Text style={styles.cardBody}>{error}</Text>
+            <Text style={styles.cardBody}>{loadError}</Text>
             <Pressable onPress={retry} style={styles.connectButton}>
               <Text style={styles.connectButtonLabel}>Retry</Text>
             </Pressable>
@@ -185,8 +185,14 @@ export function DashboardScreen({ navigation }: Props) {
           </>
         )}
 
-        {!loading && !error && (
+        {!loading && !loadError && (
           <>
+            {mutationError && (
+              <View style={styles.mutationErrorCard}>
+                <Text style={styles.mutationErrorText}>{mutationError}</Text>
+              </View>
+            )}
+
             {overdueTasks.length > 0 && (
               <>
                 <Text style={[styles.sectionLabel, styles.overdueLabel]}>Overdue</Text>
@@ -387,6 +393,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: colors.textPrimary,
+  },
+  mutationErrorCard: {
+    marginTop: 14,
+    backgroundColor: colors.reviewBg,
+    borderRadius: radii.card,
+    padding: 14,
+  },
+  mutationErrorText: {
+    fontSize: 13,
+    color: colors.reviewText,
+    fontWeight: '600',
   },
   sectionLabel: {
     marginTop: 26,

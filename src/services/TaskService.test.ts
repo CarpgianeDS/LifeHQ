@@ -64,6 +64,54 @@ describe('TaskService', () => {
     expect(await repository.list()).toHaveLength(0);
   });
 
+  test('trims a padded title before persisting a new task', async () => {
+    const repository = new InMemoryTasksRepository();
+    const service = new TaskService(repository);
+    const created = await service.create({ ...validInput, title: '  Renew car insurance  ' });
+    expect(created.title).toBe('Renew car insurance');
+    expect((await repository.list())[0].title).toBe('Renew car insurance');
+  });
+
+  describe('update validation and normalization (same rules as create)', () => {
+    test('rejects an empty title patch before it reaches the repository', async () => {
+      const repository = new InMemoryTasksRepository();
+      const service = new TaskService(repository);
+      const created = await service.create(validInput);
+
+      await expect(service.update(created.id, { title: '   ' })).rejects.toThrow(TaskValidationError);
+      expect((await repository.list())[0].title).toBe(created.title);
+    });
+
+    test('rejects an unparseable due date patch before it reaches the repository', async () => {
+      const repository = new InMemoryTasksRepository();
+      const service = new TaskService(repository);
+      const created = await service.create(validInput);
+
+      await expect(service.update(created.id, { dueAt: 'not-a-date' })).rejects.toThrow(TaskValidationError);
+      expect((await repository.list())[0].dueAt).toBe(created.dueAt);
+    });
+
+    test('trims a padded title before persisting an update', async () => {
+      const repository = new InMemoryTasksRepository();
+      const service = new TaskService(repository);
+      const created = await service.create(validInput);
+
+      const updated = await service.update(created.id, { title: '  Renew home insurance  ' });
+      expect(updated.title).toBe('Renew home insurance');
+      expect((await repository.list())[0].title).toBe('Renew home insurance');
+    });
+
+    test('a patch that never touches title/dueAt is not required to carry valid ones', async () => {
+      const repository = new InMemoryTasksRepository();
+      const service = new TaskService(repository);
+      const created = await service.create(validInput);
+
+      const updated = await service.update(created.id, { notes: 'Just a note update' });
+      expect(updated.notes).toBe('Just a note update');
+      expect(updated.title).toBe(created.title);
+    });
+  });
+
   test('wraps a repository failure in a typed, user-safe TaskPersistenceError', async () => {
     const repository = new InMemoryTasksRepository();
     repository.failWith = new Error('SQLITE_IOERR: disk I/O error');

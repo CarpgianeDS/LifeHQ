@@ -54,6 +54,19 @@ export function toDisplayTask(task: Task, now: Date = new Date()): DisplayTask {
   };
 }
 
+/** Re-derives `dueBucket`/`dueLabel` for already-loaded tasks against a
+ *  fresh `now`, without touching anything else about them. Used to refresh
+ *  the display when the app becomes active again or the local calendar day
+ *  changes — a task due "today" at 11pm should read "Overdue" if the app is
+ *  still open (or reopened) after midnight, without needing a DB refetch. */
+export function refreshDisplayTasks(tasks: DisplayTask[], now: Date = new Date()): DisplayTask[] {
+  return tasks.map((t) => ({
+    ...t,
+    dueBucket: computeDueBucket(t.dueAt, now),
+    dueLabel: computeDueLabel(t.dueAt, now),
+  }));
+}
+
 /** ISO timestamp `days` calendar days from `from` (default now) — used by
  *  seed data and email-suggestion mock data to express a due date as a
  *  relative offset. */

@@ -22,17 +22,25 @@ export function QuickAddSheet({ visible, onClose }: QuickAddSheetProps) {
   const { addTask } = useTasks();
   const [text, setText] = useState('');
   const [parsing, setParsing] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   function handleClose() {
     if (parsing) return;
     setText('');
+    setSubmitError(null);
     onClose();
+  }
+
+  function handleChangeText(value: string) {
+    setText(value);
+    if (submitError) setSubmitError(null);
   }
 
   function submit() {
     const trimmed = text.trim();
     if (!trimmed) return;
     setParsing(true);
+    setSubmitError(null);
     setTimeout(async () => {
       const module = categorizeText(trimmed);
       try {
@@ -48,9 +56,10 @@ export function QuickAddSheet({ visible, onClose }: QuickAddSheetProps) {
         setParsing(false);
         setText('');
         onClose();
-      } catch {
+      } catch (err) {
         // Keep the sheet open with the user's text intact so they can retry.
         setParsing(false);
+        setSubmitError(err instanceof Error ? err.message : "Couldn't save the task. Please try again.");
       }
     }, 1100);
   }
@@ -66,12 +75,13 @@ export function QuickAddSheet({ visible, onClose }: QuickAddSheetProps) {
             <Text style={styles.title}>Quick Add</Text>
             <TextInput
               value={text}
-              onChangeText={setText}
+              onChangeText={handleChangeText}
               placeholder="e.g. Renew car insurance next month"
               placeholderTextColor={colors.textMuted}
               style={styles.input}
               autoFocus
             />
+            {submitError && <Text style={styles.errorText}>{submitError}</Text>}
             <View style={styles.actions}>
               <Pressable
                 onPress={handleClose}
@@ -124,6 +134,11 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 15,
     color: colors.textPrimary,
+  },
+  errorText: {
+    marginTop: 8,
+    fontSize: 13,
+    color: colors.priority.high,
   },
   actions: {
     flexDirection: 'row',
