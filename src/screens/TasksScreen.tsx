@@ -28,7 +28,7 @@ const categoryFilters: { key: CategoryFilter; label: string }[] = [
 ];
 
 export function TasksScreen({ navigation }: Props) {
-  const { tasks, loading, error, toggleTask, retry } = useTasks();
+  const { tasks, loading, loadError, mutationError, toggleTask, retry } = useTasks();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -51,17 +51,23 @@ export function TasksScreen({ navigation }: Props) {
           </View>
         )}
 
-        {error && !loading && (
+        {loadError && !loading && (
           <View style={styles.statusCard}>
-            <Text style={styles.errorLabel}>{error}</Text>
+            <Text style={styles.errorLabel}>{loadError}</Text>
             <Pressable onPress={retry} style={styles.retryButton}>
               <Text style={styles.retryButtonLabel}>Retry</Text>
             </Pressable>
           </View>
         )}
 
-        {!loading && !error && (
+        {!loading && !loadError && (
           <>
+            {mutationError && (
+              <View style={styles.mutationErrorCard}>
+                <Text style={styles.mutationErrorText}>{mutationError.message}</Text>
+              </View>
+            )}
+
             <View style={styles.chipRow}>
               {statusFilters.map((f) => {
                 const active = statusFilter === f.key;
@@ -201,6 +207,17 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  mutationErrorCard: {
+    marginTop: 18,
+    backgroundColor: colors.reviewBg,
+    borderRadius: radii.card,
+    padding: spacing.cardPadding,
+  },
+  mutationErrorText: {
+    fontSize: 13,
+    color: colors.reviewText,
+    fontWeight: '600',
   },
   listCard: {
     marginTop: 18,

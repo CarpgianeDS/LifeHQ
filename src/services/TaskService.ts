@@ -16,13 +16,40 @@ function toDisplay(task: Task, now: Date = new Date()): DisplayTask {
   };
 }
 
-function assertValidNewTask(input: NewTaskInput): void {
-  if (!input.title.trim()) {
+function assertValidTitle(title: string): void {
+  if (!title.trim()) {
     throw new TaskValidationError('Task title cannot be empty.');
   }
-  if (Number.isNaN(new Date(input.dueAt).getTime())) {
+}
+
+function assertValidDueAt(dueAt: string | null): void {
+  // Explicitly clearing the due date (null) is valid — Task.dueAt is
+  // nullable by design. Only a present-but-unparseable string is rejected.
+  if (dueAt === null) return;
+  if (Number.isNaN(new Date(dueAt).getTime())) {
     throw new TaskValidationError('Task due date is not a valid date.');
   }
+}
+
+function assertValidNewTask(input: NewTaskInput): void {
+  assertValidTitle(input.title);
+  assertValidDueAt(input.dueAt);
+}
+
+function normalizeNewTask(input: NewTaskInput): NewTaskInput {
+  return { ...input, title: input.title.trim() };
+}
+
+/** Same rules as a new task, but only applied to whichever fields the patch
+ *  actually touches — a patch that only changes `notes`, say, shouldn't be
+ *  required to carry a valid title or due date it never set out to change. */
+function assertValidUpdate(patch: UpdateTaskInput): void {
+  if (patch.title !== undefined) assertValidTitle(patch.title);
+  if (patch.dueAt !== undefined) assertValidDueAt(patch.dueAt);
+}
+
+function normalizeUpdate(patch: UpdateTaskInput): UpdateTaskInput {
+  return patch.title !== undefined ? { ...patch, title: patch.title.trim() } : patch;
 }
 
 /** TaskUnavailableError is already a known, user-safe condition (e.g. "not
@@ -55,7 +82,7 @@ export class TaskService {
   async create(input: NewTaskInput): Promise<DisplayTask> {
     assertValidNewTask(input);
     try {
-      const task = await this.repository.create(input);
+      const task = await this.repository.create(normalizeNewTask(input));
       return toDisplay(task);
     } catch (error) {
       handleRepositoryError('TaskService.create failed', error, "Couldn't save the new task. Please try again.");
@@ -63,8 +90,9 @@ export class TaskService {
   }
 
   async update(id: string, patch: UpdateTaskInput): Promise<DisplayTask> {
+    assertValidUpdate(patch);
     try {
-      const task = await this.repository.update(id, patch);
+      const task = await this.repository.update(id, normalizeUpdate(patch));
       return toDisplay(task);
     } catch (error) {
       handleRepositoryError('TaskService.update failed', error, "Couldn't update the task. Please try again.");

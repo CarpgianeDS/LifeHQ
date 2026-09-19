@@ -1,4 +1,4 @@
-import { computeDueBucket, computeDueLabel, isoDaysFromNow, toDisplayTask } from './dueDate';
+import { computeDueBucket, computeDueLabel, isoDaysFromNow, refreshDisplayTasks, toDisplayTask } from './dueDate';
 
 const NOW = new Date(2026, 6, 8, 12, 0, 0); // Wed 8 July 2026, noon
 
@@ -102,6 +102,60 @@ describe('toDisplayTask', () => {
     expect(display.dueBucket).toBe('overdue');
     expect(display.dueLabel).toBe('Overdue · 3 days');
     expect(display.id).toBe('t1');
+  });
+});
+
+describe('refreshDisplayTasks', () => {
+  const baseTask = {
+    id: 't1',
+    title: 'Replace boiler filter',
+    module: 'house' as const,
+    priority: 'low' as const,
+    completed: false,
+    source: 'manual' as const,
+    notes: '',
+    needsReview: false,
+    createdAt: NOW.toISOString(),
+    updatedAt: NOW.toISOString(),
+    householdId: null,
+    createdByMemberId: null,
+    updatedByMemberId: null,
+  };
+
+  test('due-state refresh after the calendar day changes: a task due "today" becomes overdue once the day rolls over', () => {
+    const dueAt = isoDaysFromNow(0, NOW); // due today, relative to NOW
+    const displayTask = toDisplayTask({ ...baseTask, dueAt }, NOW);
+    expect(displayTask.dueBucket).toBe('today');
+    expect(displayTask.dueLabel).toBe('Today');
+
+    const tomorrow = isoDaysFromNow(1, NOW);
+    const refreshed = refreshDisplayTasks([displayTask], new Date(tomorrow));
+
+    expect(refreshed[0].dueBucket).toBe('overdue');
+    expect(refreshed[0].dueLabel).toBe('Overdue · 1 day');
+    // Nothing else about the task changes — only the derived display fields.
+    expect(refreshed[0].id).toBe('t1');
+    expect(refreshed[0].completed).toBe(false);
+  });
+
+  test('an upcoming task becomes "today" once the calendar day catches up to it', () => {
+    const dueAt = isoDaysFromNow(1, NOW); // due tomorrow, relative to NOW
+    const displayTask = toDisplayTask({ ...baseTask, dueAt }, NOW);
+    expect(displayTask.dueBucket).toBe('upcoming');
+
+    const nextDay = isoDaysFromNow(1, NOW);
+    const refreshed = refreshDisplayTasks([displayTask], new Date(nextDay));
+
+    expect(refreshed[0].dueBucket).toBe('today');
+    expect(refreshed[0].dueLabel).toBe('Today');
+  });
+
+  test('refreshing with the same day is a no-op', () => {
+    const dueAt = isoDaysFromNow(2, NOW);
+    const displayTask = toDisplayTask({ ...baseTask, dueAt }, NOW);
+    const refreshed = refreshDisplayTasks([displayTask], NOW);
+    expect(refreshed[0].dueBucket).toBe(displayTask.dueBucket);
+    expect(refreshed[0].dueLabel).toBe(displayTask.dueLabel);
   });
 });
 

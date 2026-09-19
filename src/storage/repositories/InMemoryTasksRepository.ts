@@ -10,6 +10,11 @@ export class InMemoryTasksRepository implements TasksRepository {
   /** When set, every method rejects with this error instead of succeeding —
    *  used to test failure handling (e.g. optimistic rollback). */
   failWith: Error | null = null;
+  /** Optional hook awaited at the start of `setCompleted`, before it applies
+   *  or fails — lets concurrency tests control per-call timing/outcome
+   *  (e.g. "task A's write resolves after task B's") without any of that
+   *  machinery leaking into production code. */
+  beforeSetCompleted?: (id: string, completed: boolean) => Promise<void>;
 
   constructor(initial: Task[] = []) {
     this.tasks = [...initial];
@@ -52,6 +57,7 @@ export class InMemoryTasksRepository implements TasksRepository {
   }
 
   async setCompleted(id: string, completed: boolean): Promise<Task> {
+    if (this.beforeSetCompleted) await this.beforeSetCompleted(id, completed);
     this.throwIfFailing();
     const existing = this.getByIdOrThrow(id);
     const updated: Task = { ...existing, completed, updatedAt: new Date().toISOString() };

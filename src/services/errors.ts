@@ -29,7 +29,10 @@ export class TaskUnavailableError extends Error {
 
 /** Dev-context logging only — the raw error (which may include SQL/internal
  *  detail) must never reach the UI; callers catch our typed errors instead
- *  and show their user-safe `message`. */
+ *  and show their user-safe `message`. Guarded by `__DEV__` so release
+ *  builds never write internal error detail to the console. */
 export function logError(context: string, error: unknown): void {
-  console.error(`[LifeHQ] ${context}:`, error);
+  if (__DEV__) {
+    console.error(`[LifeHQ] ${context}:`, error);
+  }
 }
